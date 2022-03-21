@@ -71,23 +71,22 @@ func (bot *robot) handleIssueEvent(e *github.IssuesEvent, c config.Config, log *
 }
 
 func (bot *robot) handleNoteEvent(e *github.IssueCommentEvent, c config.Config, log *logrus.Entry) error {
-	/*if !e.IsCreatingCommentEvent() || !e.IsIssue() {
+	if !githubclient.IsIssueCommentCreated(e.GetAction()) {
 		return nil
 	}
 
-	org, repo := e.GetOrgRepo()
+	org, repo := githubclient.GetOrgRepo(e.GetRepo())
 
 	cfg, err := bot.getConfig(c, org, repo)
 	if err != nil || !cfg.EnableSyncComment {
 		return err
 	}
 
-	if !bot.needSync(cfg, e.GetCommenter()) {
+	if !bot.needSync(cfg, e.GetComment().GetUser().GetLogin()) {
 		return nil
 	}
 
-	// TODO: exec sync logic*/
-	return nil
+	return bot.sync.HandleSyncIssueComment(org, repo, e)
 }
 
 func (bot *robot) needSync(cfg *botConfig, author string) bool {

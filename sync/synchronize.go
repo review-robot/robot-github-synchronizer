@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 
 	"github.com/google/go-github/v36/github"
@@ -19,6 +21,16 @@ const (
 	syncIssueEndPoint   = "/synchronization/gitee/issue"
 	syncCommentEndPoint = "/synchronization/gitee/comment"
 	syncedIssueMsg      = `**SYNCED PROMPT:**  current issue has been synced with [it](%s) <!--- %s -->`
+)
+
+var (
+	syncIssueMsgReg = regexp.MustCompile(
+		fmt.Sprintf(
+			"\\*\\*SYNCED PROMPT:\\*\\*  current issue has been synced with \\[it\\]\\(%s\\) <!--- %s -->",
+			"(.*)", "(.*)",
+		),
+	)
+	syncedInfoReg = regexp.MustCompile(`<!--- (.*) -->`)
 )
 
 // Synchronizer the sync calling the sync service
@@ -48,8 +60,19 @@ func (sc *Synchronizer) HandleSyncIssueToGitee(org, repo string, e *github.Issue
 }
 
 // HandleSyncIssueComment synchronize the comments of the gitee platform Issue to the Github platform
-func (sc *Synchronizer) HandleSyncIssueComment(org, repo string, e *github.IssueComment) error {
-	return nil
+func (sc *Synchronizer) HandleSyncIssueComment(org, repo string, e *github.IssueCommentEvent) error {
+	info, err := sc.findSyncedIssueInfoFromComments(org, repo, e.GetIssue().GetNumber())
+	if err != nil {
+		return err
+	}
+
+	req := reqComment{
+		orgRepo: orgRepo{Org: info.GiteeOrg, Repo: info.GiteeRepo},
+		Number:  info.GiteeIssueNumber,
+		Content: e.GetComment().GetBody(),
+	}
+
+	return sc.createGiteeComment(req)
 }
 
 func (sc *Synchronizer) addIssueSyncedMsg(org, repo string, si *issueSyncedInfo, issue *github.Issue) error {
@@ -138,6 +161,44 @@ func (sc *Synchronizer) getCallURL(p string) string {
 	v.Path = path.Join(v.Path, p)
 
 	return v.String()
+}
+
+func (sc *Synchronizer) findSyncedIssueInfoFromComments(org, repo string, number int) (*issueSyncedRelation, error) {
+	comments, _, err := sc.gc.Issues.ListComments(context.Background(), org, repo, number, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range comments {
+		if si, b := parseSyncedIssueInfo(v); b {
+			return si, nil
+		}
+	}
+
+	return nil, fmt.Errorf("PR %s/%s/%d is not synced", org, repo, number)
+}
+
+func parseSyncedIssueInfo(comment *github.IssueComment) (*issueSyncedRelation, bool) {
+	body := comment.GetBody()
+	if !syncIssueMsgReg.MatchString(body) {
+		return nil, false
+	}
+
+	matches := syncedInfoReg.FindAllStringSubmatch(body, -1)
+	if len(matches) != 1 || len(matches[0]) != 2 {
+		return nil, false
+	}
+
+	infoStr := matches[0][1]
+	info := new(issueSyncedRelation)
+
+	if err := decodeObject(infoStr, info); err != nil {
+		logrus.WithError(err).Error("parse synced issue info fail")
+
+		return nil, false
+	}
+
+	return info, true
 }
 
 func encodeObject(data interface{}) (string, error) {
