@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/google/go-github/v36/github"
 	"github.com/opensourceways/community-robot-lib/config"
@@ -10,31 +9,32 @@ import (
 	"github.com/opensourceways/community-robot-lib/robot-github-framework"
 	"github.com/sirupsen/logrus"
 
+	conf "github.com/opensourceways/robot-github-synchronizer/config"
 	"github.com/opensourceways/robot-github-synchronizer/sync"
 )
 
 const botName = "synchronizer"
 
-func newRobot(sync sync.Synchronizer, name string, ) *robot {
+func newRobot(sync sync.Synchronize, name string, ) *robot {
 	return &robot{sync: sync, name: name}
 }
 
 type robot struct {
-	sync sync.Synchronizer
+	sync sync.Synchronize
 	name string
 }
 
 func (bot *robot) NewConfig() config.Config {
-	return &configuration{}
+	return &conf.Configuration{}
 }
 
-func (bot *robot) getConfig(cfg config.Config, org, repo string) (*botConfig, error) {
-	c, ok := cfg.(*configuration)
+func (bot *robot) getConfig(cfg config.Config, org, repo string) (*conf.BotConfig, error) {
+	c, ok := cfg.(*conf.Configuration)
 	if !ok {
 		return nil, fmt.Errorf("can't convert to configuration")
 	}
 
-	if bc := c.configFor(org, repo); bc != nil {
+	if bc := c.ConfigFor(org, repo); bc != nil {
 		return bc, nil
 	}
 
@@ -51,23 +51,22 @@ func (bot *robot) RobotName() string {
 }
 
 func (bot *robot) handleIssueEvent(e *github.IssuesEvent, c config.Config, log *logrus.Entry) error {
-	if !githubclient.IsIssueOpened(e.GetAction()) {
-		return nil
-	}
-
 	org, repo := githubclient.GetOrgRepo(e.GetRepo())
 
 	cfg, err := bot.getConfig(c, org, repo)
-	if err != nil || !cfg.EnableSyncIssue {
+	if err != nil {
 		return err
 	}
 
-	if !bot.needSync(cfg, e.GetIssue().GetUser().GetLogin()) {
-		log.Info("not need sync")
-		return nil
+	if githubclient.IsIssueOpened(e.GetAction()) {
+		return bot.sync.HandleSyncIssueToGitee(org, repo, e.GetIssue(), cfg)
 	}
 
-	return bot.sync.HandleSyncIssueToGitee(org, repo, e.GetIssue())
+	if e.GetAction() == githubclient.ActionReopen || e.GetAction() == githubclient.ActionClosed {
+		return bot.sync.HandleSyncIssueStatus(org, repo, e.GetIssue(), cfg)
+	}
+
+	return nil
 }
 
 func (bot *robot) handleNoteEvent(e *github.IssueCommentEvent, c config.Config, log *logrus.Entry) error {
@@ -78,27 +77,9 @@ func (bot *robot) handleNoteEvent(e *github.IssueCommentEvent, c config.Config, 
 	org, repo := githubclient.GetOrgRepo(e.GetRepo())
 
 	cfg, err := bot.getConfig(c, org, repo)
-	if err != nil || !cfg.EnableSyncComment {
+	if err != nil {
 		return err
 	}
 
-	if !bot.needSync(cfg, e.GetComment().GetUser().GetLogin()) {
-		return nil
-	}
-
-	return bot.sync.HandleSyncIssueComment(org, repo, e)
-}
-
-func (bot *robot) needSync(cfg *botConfig, author string) bool {
-	if len(cfg.DoNotSyncAuthors) == 0 {
-		return strings.ToLower(author) != bot.name
-	}
-
-	for _, v := range cfg.DoNotSyncAuthors {
-		if strings.ToLower(v) == botName {
-			return false
-		}
-	}
-
-	return true
+	return bot.sync.HandleSyncIssueComment(org, repo, e, cfg)
 }

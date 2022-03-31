@@ -65,17 +65,19 @@ func main() {
 
 	c := githubclient.NewGithubClient(secretAgent.GetTokenGenerator(o.github.TokenPath))
 
-	syncCli, err := sync.NewSynchronize(o.syncEndpoint, c)
+	v, _, err := c.Users.Get(context.Background(), "")
+	if err != nil {
+		logrus.WithError(err).Fatal("Error get bot name")
+	}
+
+	bName := strings.ToLower(v.GetLogin())
+
+	syncCli, err := sync.NewSynchronize(o.syncEndpoint, c, bName)
 	if err != nil {
 		logrus.WithError(err).Fatal("error init synchronizer.")
 	}
 
-	v, _, err := c.Users.Get(context.Background(), "")
-	if err != nil {
-		logrus.WithError(err).Error("Error get bot name")
-	}
-
-	r := newRobot(syncCli, strings.ToLower(v.GetLogin()))
+	r := newRobot(syncCli, bName)
 
 	framework.Run(r, o.service)
 }
